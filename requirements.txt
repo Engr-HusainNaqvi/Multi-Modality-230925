@@ -1,13 +1,13 @@
-streamlit==1.28.1
-pydicom==2.4.4
-numpy==1.24.3
-torch==2.0.1
-torchvision==0.15.2
-Pillow==10.0.1
-matplotlib==3.7.2
-scikit-image==0.21.0
-nibabel==5.2.0
-transformers==4.33.2
-cryptography==41.0.4
-torch-geometric==2.4.0  # For GNNs (Paper 8)
-accelerate==0.21.0  # For model loading
+streamlit
+pydicom
+numpy
+torch
+torchvision
+Pillow
+matplotlib
+scikit-image
+nibabel
+transformers
+cryptography
+torch-geometric
+accelerate
