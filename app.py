@@ -2,158 +2,185 @@ import streamlit as st
 import pydicom
 import numpy as np
 import torch
-from PIL import Image
 import os
-import json
-from datetime import datetime
-import io
-from cryptography.fernet import Fernet  # For basic encryption (generate key once)
-import tempfile
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM  # For LLM report gen (e.g., BioGPT placeholder)
+import monai
+from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityd, Resized
+from transformers import (
+    CLIPProcessor, CLIPModel,
+    BlipProcessor, BlipForConditionalGeneration,
+    AutoTokenizer, AutoModelForCausalLM,
+    GPT2Tokenizer, GPT2LMHeadModel
+)
+from PIL import Image
 import matplotlib.pyplot as plt
-from skimage import exposure  # For preprocessing
-import nibabel as nib  # For NIfTI conversion if needed
+from pathlib import Path
+import uuid
 
-# CUDA/CPU Detection
-device = "cuda" if torch.cuda.is_available() else "cpu"
-st.sidebar.info(f"Using device: {device.upper()}")
+# Detect CUDA/CPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+st.write(f"Using device: {device}")
 
-# Secure Storage Setup (Local encrypted dir)
-STORAGE_DIR = "./storage"
+# Secure storage directory
+STORAGE_DIR = "secure_storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
-key = Fernet.generate_key()  # In production, load persistent key
-cipher = Fernet(key)
+os.makedirs(os.path.join(STORAGE_DIR, "images"), exist_ok=True)
+os.makedirs(os.path.join(STORAGE_DIR, "reports"), exist_ok=True)
 
-# Placeholder for Pretrained Models (Ties to Papers)
-# Paper 1: CoCa/Generative VLM (use HF placeholder)
-# Paper 2: MMVLFMs/Transformers (use vision encoder)
-# Paper 3: CLIMB/Multitask (load sample data or skip for demo)
-# Paper 4: QoQ-Med/RL (use RL-fine-tuned LLM)
-# Paper 6: MedAtlas/LLM Reasoning
-# Paper 7: Video-Text for 3D
-# Paper 8: GNNs/Transformers (use torch_geometric placeholder)
-# For demo: Use simple vision model + BioGPT for reports
+# Preprocessing pipeline (using MONAI for medical images)
+preprocess_transforms = Compose([
+    LoadImaged(keys=["image"]),
+    EnsureChannelFirstd(keys=["image"]),
+    ScaleIntensityd(keys=["image"]),
+    Resized(keys=["image"], spatial_size=(256, 256, -1)),  # Handle 3D if needed
+])
 
-# Load LLM for Report Generation (Paper 4,6: MLLM + Multi-round Reasoning)
+# Load models with caching
 @st.cache_resource
-def load_llm():
-    tokenizer = AutoTokenizer.from_pretrained("microsoft/BioGPT")
-    model = AutoModelForCausalLM.from_pretrained("microsoft/BioGPT")
-    model.to(device)
-    return pipeline("text-generation", model=model, tokenizer=tokenizer, device=0 if device == "cuda" else -1)
+def load_models():
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    clip_proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
+    blip_proc = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+    llama_tok = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+    llama_model = AutoModelForCausalLM.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0").to(device)
+    gpt2_tok = GPT2Tokenizer.from_pretrained("distilgpt2")
+    gpt2_model = GPT2LMHeadModel.from_pretrained("distilgpt2").to(device)
+    return clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model
 
-llm_pipeline = load_llm()
+clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model = load_models()
 
-# DICOM Preprocessing Function (Stage 2: SSL + Transformers [Paper 2,8])
-def preprocess_dicom(dcm_file):
-    ds = pydicom.dcmread(dcm_file)
-    img = ds.pixel_array.astype(np.float32)
-    # Normalize (contrastive learning inspired [Paper 1])
-    img = exposure.equalize_hist(img) if img.ndim == 2 else img
-    # Placeholder: GNN for metadata (Paper 8) - encode as graph features
-    metadata = {k: str(v) for k, v in ds.items() if k != 'PixelData'}
-    return Image.fromarray((img * 255).astype(np.uint8)), metadata
+# Function to process DICOM
+def process_dicom(file_path):
+    ds = pydicom.dcmread(file_path)
+    image = ds.pixel_array
+    modality = ds.Modality  # e.g., CT, MR, US, etc.
+    return image, modality, ds
 
-# Multimodal Fusion Placeholder (Stage 4: MMVLFMs + Attention [Paper 2,3,6,7,8])
-def fuse_modalities(images_list, metadata_list):
-    # Dummy fusion: Stack and apply simple attention (MHSA placeholder [Paper 2])
-    fused = np.mean([np.array(img) for img in images_list], axis=0)
-    # Cross-modal: Concat metadata as text
-    text_fusion = " ".join([str(md) for md in metadata_list])
-    # Paper 7: For 3D/Endoscopy, treat as video frames (placeholder)
-    return Image.fromarray(fused), text_fusion
+# Multimodal fusion placeholder (integrates techniques from papers)
+def multimodal_fusion(images, metadata, notes):
+    # Placeholder: Fuse using transformers/MHSA/cross-attention
+    fused_features = np.random.rand(512)  # Mock fused vector
+    return fused_features
 
-# Analysis Placeholder (Stage 5: Multi-Round Reasoning [Paper 6,7])
-def analyze_fused(fused_img, text_fusion):
-    # Dummy detection: Use simple threshold (replace with VLM [Paper 1])
-    features = np.mean(np.array(fused_img))
-    diagnosis = "Anomaly detected in fused modalities" if features > 0.5 else "Normal"
-    # Multi-round reasoning (Paper 6): Simulate 2 rounds
-    round1 = llm_pipeline(f"Analyze: {text_fusion}", max_length=50)[0]['generated_text']
-    round2 = llm_pipeline(f"Refine: {round1} + {diagnosis}", max_length=50)[0]['generated_text']
-    return diagnosis, round2
+# Analysis and reasoning placeholder
+def analyze_and_reason(fused_features):
+    # Placeholder: Multi-round reasoning with LLM
+    return "Diagnostic insights: Potential anomaly in region X."
 
-# Report Generation (Stage 6: Generative VLM + RL [Paper 1,4,6])
-def generate_report(analysis, fused_text):
-    prompt = f"Medical Report: Analysis - {analysis}. Fused Data - {fused_text}. Generate structured report."
-    report = llm_pipeline(prompt, max_length=200, num_return_sequences=1)[0]['generated_text']
-    return report
-
-# Secure Storage Function
-def store_securely(img, report, modality):
-    timestamp = datetime.now().isoformat()
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, format='PNG')
-    img_enc = cipher.encrypt(img_bytes.getvalue())
-    report_enc = cipher.encrypt(report.encode())
+# Report generation adapted from old code
+def generate_report(analysis, images):
+    # Reference findings (from old code; expand for multi-modality)
+    reference_findings = [
+        "There is evidence of right lower lobe consolidation.",
+        "No acute cardiopulmonary abnormality.",
+        "Mild cardiomegaly with clear lungs.",
+        "Findings consistent with pneumonia.",
+        "Chronic interstitial changes noted."
+    ]
     
-    filename = f"{modality}_{timestamp}.enc"
-    with open(os.path.join(STORAGE_DIR, filename), 'wb') as f:
-        f.write(img_enc + b"|" + report_enc)  # Concat for simplicity
-    return filename
+    # Generate captions for each image (handle multi-modality)
+    captions = []
+    for img_tensor in images:
+        # Convert MONAI tensor to PIL (take first channel/slice if multi-dim)
+        if img_tensor.ndim > 2:
+            img_array = img_tensor[0].cpu().numpy()  # First channel
+        else:
+            img_array = img_tensor.cpu().numpy()
+        img_array = (img_array - img_array.min()) / (img_array.max() - img_array.min() + 1e-6) * 255
+        img_pil = Image.fromarray(img_array.astype(np.uint8)).convert("RGB").resize((224, 224))
+        
+        # Caption with BLIP
+        blip_inputs = blip_proc(images=img_pil, return_tensors="pt").to(device)
+        caption_ids = blip_model.generate(**blip_inputs)
+        caption = blip_proc.decode(caption_ids[0], skip_special_tokens=True)
+        captions.append(caption)
+    
+    caption_str = " ".join(captions) + f" Analysis: {analysis}"
+    
+    # CLIP similarity (use first image for features; or average if multi)
+    img_pil = Image.fromarray(img_array.astype(np.uint8)).convert("RGB").resize((224, 224))  # Use last for simplicity
+    img_inputs = clip_proc(images=img_pil, return_tensors="pt").to(device)
+    with torch.no_grad():
+        img_features = clip_model.get_image_features(**img_inputs)
+        img_features = torch.nn.functional.normalize(img_features, dim=-1)
+    
+    text_inputs = clip_proc(text=reference_findings, return_tensors="pt", padding=True).to(device)
+    with torch.no_grad():
+        txt_features = clip_model.get_text_features(**text_inputs)
+        txt_features = torch.nn.functional.normalize(txt_features, dim=-1)
+    
+    similarities = torch.matmul(txt_features, img_features.T).squeeze()
+    top_indices = torch.topk(similarities, k=3).indices
+    top_findings = [reference_findings[i] for i in top_indices]
+    
+    # Draft with TinyLlama
+    llama_prompt = (
+        f"🧠 Caption: {caption_str}\n"
+        f"📚 Retrieved Reports:\n" +
+        "\n".join(f"- {f}" for f in top_findings) +
+        "\n\nGenerate a clinical-style radiology report:"
+    )
+    llama_inputs = llama_tok(llama_prompt, return_tensors="pt").to(device)
+    llama_output = llama_model.generate(**llama_inputs, max_new_tokens=300, temperature=0.7)
+    draft_report = llama_tok.decode(llama_output[0], skip_special_tokens=True)
+    
+    # Refine with GPT2 (first pass)
+    gpt2_input_1 = f"Caption: {caption_str}\nDraft: {draft_report}\nRefine this into a structured radiology report:"
+    gpt2_inputs_1 = gpt2_tok(gpt2_input_1, return_tensors="pt").to(device)
+    gpt2_output_1 = gpt2_model.generate(**gpt2_inputs_1, max_new_tokens=250, do_sample=True)
+    refined_1 = gpt2_tok.decode(gpt2_output_1[0], skip_special_tokens=True)
+    
+    # Refine with GPT2 (second pass)
+    gpt2_input_2 = f"{refined_1}\nRefine the new report:"
+    gpt2_inputs_2 = gpt2_tok(gpt2_input_2, return_tensors="pt").to(device)
+    gpt2_output_2 = gpt2_model.generate(**gpt2_inputs_2, max_new_tokens=200, do_sample=True)
+    report = gpt2_tok.decode(gpt2_output_2[0], skip_special_tokens=True)
+    
+    # Mock Grad-CAM visualization (using first image)
+    fig, ax = plt.subplots()
+    ax.imshow(img_array, cmap="gray")
+    ax.set_title("Grad-CAM Heatmap (Mock)")
+    plt.savefig("heatmap.png")
+    
+    return report, "heatmap.png"
 
-# Streamlit App UI
-st.title("AI-Based Doctor Companion: Multi-Modality Medical Image Analysis & Report Generation")
+# Streamlit App
+st.title("AI Doctor Companion: Multi-Modality Medical Image Analysis")
 
-# Multi-Data Upload (Supports CT, MRI, etc. DICOMs)
-uploaded_files = st.file_uploader("Upload DICOM Files (Multi-Modality)", accept_multiple_files=True, type=['dcm', 'dicom'])
+uploaded_files = st.file_uploader("Upload DICOM files (Multi-Modality: CT, MRI, X-ray, Ultrasound, PET, Endoscopy)", type=["dcm"], accept_multiple_files=True)
+clinical_notes = st.text_area("Enter Clinical Notes")
 
-if uploaded_files:
+if st.button("Process and Generate Report") and uploaded_files:
     images = []
-    metadatas = []
-    modalities = []  # Track modality from metadata
-    
-    for file in uploaded_files:
-        # Stage 1: Ingestion (CLIMB-inspired [Paper 3])
-        with tempfile.NamedTemporaryFile(suffix='.dcm', delete=False) as tmp:
-            tmp.write(file.read())
-            tmp_path = tmp.name
-        img, md = preprocess_dicom(tmp_path)  # Stage 2
-        modality = md.get('Modality', 'Unknown')
+    modalities = []
+    metadata_list = []
+    for uploaded_file in uploaded_files:
+        unique_id = str(uuid.uuid4())
+        save_path = os.path.join(STORAGE_DIR, "images", f"{unique_id}_{uploaded_file.name}")
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
+        
+        image, modality, metadata = process_dicom(save_path)
+        processed_data = preprocess_transforms({"image": save_path})
+        images.append(processed_data["image"])
         modalities.append(modality)
-        images.append(img)
-        metadatas.append(md)
-        os.unlink(tmp_path)  # Clean temp
+        metadata_list.append(metadata)
     
-    if len(images) > 1:
-        # Stage 4: Fusion for Multi-Modality
-        fused_img, fused_text = fuse_modalities(images, metadatas)
-        st.image(fused_img, caption="Fused Multi-Modality Image")
-        
-        # Stage 5: Analysis
-        diagnosis, reasoning = analyze_fused(fused_img, fused_text)
-        st.write("Diagnosis:", diagnosis)
-        st.write("Reasoning:", reasoning)
-        
-        # Stage 6: Report
-        report = generate_report(diagnosis, fused_text)
-        st.write("Generated Report:", report)
-        
-        # Stage 7: Storage
-        filename = store_securely(fused_img, report, "_".join(modalities))
-        st.success(f"Stored securely as: {filename} in {STORAGE_DIR}")
-        
-        # Explainability Placeholder [AI Suggestion: Grad-CAM/SHAP]
-        fig, ax = plt.subplots()
-        ax.imshow(np.array(fused_img))
-        ax.set_title("Explainability Heatmap (Grad-CAM Placeholder)")
-        st.pyplot(fig)
-    else:
-        st.warning("Upload multiple files for multi-modality fusion.")
-
-# View Stored Files
-if st.button("View Stored Reports"):
-    for file in os.listdir(STORAGE_DIR):
-        st.write(f"Stored: {file}")
-
-# Notes on Integration
-st.sidebar.markdown("""
-### Pipeline Ties to Papers
-- Preprocessing: GNNs/Transformers (Paper 8,2)
-- Pretraining: Contrastive/Multitask (Paper 1,3)
-- Fusion: MMVLFMs/Attention (Paper 2,6,7)
-- Reasoning: LLMs (Paper 6)
-- Report: RL/MLLMs (Paper 4)
-- All: Multimodal Integration (Paper 8)
-Paper 5: Assumed as integration rules (e.g., modular pipeline).
-""")
+    # Fusion
+    fused = multimodal_fusion(images, metadata_list, clinical_notes)
+    
+    # Analysis
+    analysis = analyze_and_reason(fused)
+    
+    # Report
+    report, heatmap_path = generate_report(analysis, images)
+    
+    # Save report
+    report_path = os.path.join(STORAGE_DIR, "reports", f"report_{unique_id}.txt")
+    with open(report_path, "w") as f:
+        f.write(report)
+    
+    st.write("**Analysis:**", analysis)
+    st.write("**Generated Report:**", report)
+    st.image(heatmap_path, caption="Explainability Visualization (Grad-CAM Mock)")
+    st.download_button("Download Report", report, file_name="medical_report.txt")
