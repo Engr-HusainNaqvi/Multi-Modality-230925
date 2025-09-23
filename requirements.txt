@@ -2,12 +2,8 @@ streamlit
 pydicom
 numpy
 torch
-torchvision
-Pillow
-matplotlib
-scikit-image
-nibabel
+monai
 transformers
-cryptography
-torch-geometric
-accelerate
+pillow
+matplotlib
+uuid
