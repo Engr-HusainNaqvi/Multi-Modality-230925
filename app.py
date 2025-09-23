@@ -34,20 +34,18 @@ preprocess_transforms = Compose([
     Resized(keys=["image"], spatial_size=(256, 256, -1)),  # Handle 3D if needed
 ])
 
-# Load models with caching
+# Load models with caching (define here, call lazily)
 @st.cache_resource
 def load_models():
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
     clip_proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
-    blip_proc = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+    blip_proc = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base", use_fast=True)  # Suppress warning
     llama_tok = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
     llama_model = AutoModelForCausalLM.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0").to(device)
     gpt2_tok = GPT2Tokenizer.from_pretrained("distilgpt2")
     gpt2_model = GPT2LMHeadModel.from_pretrained("distilgpt2").to(device)
     return clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model
-
-clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model = load_models()
 
 # Function to process DICOM
 def process_dicom(file_path):
@@ -68,7 +66,7 @@ def analyze_and_reason(fused_features):
     return "Diagnostic insights: Potential anomaly in region X."
 
 # Report generation adapted from old code
-def generate_report(analysis, images):
+def generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model):
     # Reference findings (from old code; expand for multi-modality)
     reference_findings = [
         "There is evidence of right lower lobe consolidation.",
@@ -151,6 +149,9 @@ uploaded_files = st.file_uploader("Upload DICOM files (Multi-Modality: CT, MRI, 
 clinical_notes = st.text_area("Enter Clinical Notes")
 
 if st.button("Process and Generate Report") and uploaded_files:
+    # Lazy load models here
+    clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model = load_models()
+    
     images = []
     modalities = []
     metadata_list = []
@@ -173,7 +174,7 @@ if st.button("Process and Generate Report") and uploaded_files:
     analysis = analyze_and_reason(fused)
     
     # Report
-    report, heatmap_path = generate_report(analysis, images)
+    report, heatmap_path = generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model)
     
     # Save report
     report_path = os.path.join(STORAGE_DIR, "reports", f"report_{unique_id}.txt")
