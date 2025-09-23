@@ -8,7 +8,6 @@ from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, ScaleInte
 from transformers import (
     CLIPProcessor, CLIPModel,
     BlipProcessor, BlipForConditionalGeneration,
-    AutoTokenizer, AutoModelForCausalLM,
     GPT2Tokenizer, GPT2LMHeadModel
 )
 from PIL import Image
@@ -34,18 +33,20 @@ preprocess_transforms = Compose([
     Resized(keys=["image"], spatial_size=(256, 256, -1)),  # Handle 3D if needed
 ])
 
-# Load models with caching (define here, call lazily)
+# Load models with caching (define here, call lazily; removed TinyLlama for memory)
 @st.cache_resource
 def load_models():
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    clip_proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
-    blip_proc = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base", use_fast=True)  # Suppress warning
-    llama_tok = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
-    llama_model = AutoModelForCausalLM.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0").to(device)
-    gpt2_tok = GPT2Tokenizer.from_pretrained("distilgpt2")
-    gpt2_model = GPT2LMHeadModel.from_pretrained("distilgpt2").to(device)
-    return clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model
+    try:
+        clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+        clip_proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
+        blip_proc = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base", use_fast=True)  # Suppress warning
+        gpt2_tok = GPT2Tokenizer.from_pretrained("distilgpt2")
+        gpt2_model = GPT2LMHeadModel.from_pretrained("distilgpt2").to(device)
+        return clip_model, clip_proc, blip_model, blip_proc, gpt2_tok, gpt2_model
+    except Exception as e:
+        st.error(f"Error loading models: {str(e)}")
+        raise
 
 # Function to process DICOM
 def process_dicom(file_path):
@@ -53,6 +54,13 @@ def process_dicom(file_path):
     image = ds.pixel_array
     modality = ds.Modality  # e.g., CT, MR, US, etc.
     return image, modality, ds
+
+# Function to process JPEG
+def process_jpeg(file_path):
+    image = np.array(Image.open(file_path).convert("L"))  # Convert to grayscale numpy array
+    modality = "JPEG"
+    metadata = {}  # No metadata for JPEG
+    return image, modality, metadata
 
 # Multimodal fusion placeholder (integrates techniques from papers)
 def multimodal_fusion(images, metadata, notes):
@@ -65,8 +73,8 @@ def analyze_and_reason(fused_features):
     # Placeholder: Multi-round reasoning with LLM
     return "Diagnostic insights: Potential anomaly in region X."
 
-# Report generation adapted from old code
-def generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model):
+# Report generation adapted from old code (use GPT2 for draft too)
+def generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_proc, gpt2_tok, gpt2_model):
     # Reference findings (from old code; expand for multi-modality)
     reference_findings = [
         "There is evidence of right lower lobe consolidation.",
@@ -111,16 +119,16 @@ def generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_pr
     top_indices = torch.topk(similarities, k=3).indices
     top_findings = [reference_findings[i] for i in top_indices]
     
-    # Draft with TinyLlama
-    llama_prompt = (
+    # Draft with GPT2 (replaced TinyLlama)
+    prompt = (
         f"🧠 Caption: {caption_str}\n"
         f"📚 Retrieved Reports:\n" +
         "\n".join(f"- {f}" for f in top_findings) +
         "\n\nGenerate a clinical-style radiology report:"
     )
-    llama_inputs = llama_tok(llama_prompt, return_tensors="pt").to(device)
-    llama_output = llama_model.generate(**llama_inputs, max_new_tokens=300, temperature=0.7)
-    draft_report = llama_tok.decode(llama_output[0], skip_special_tokens=True)
+    inputs = gpt2_tok(prompt, return_tensors="pt").to(device)
+    output = gpt2_model.generate(**inputs, max_new_tokens=300, temperature=0.7)
+    draft_report = gpt2_tok.decode(output[0], skip_special_tokens=True)
     
     # Refine with GPT2 (first pass)
     gpt2_input_1 = f"Caption: {caption_str}\nDraft: {draft_report}\nRefine this into a structured radiology report:"
@@ -145,12 +153,12 @@ def generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_pr
 # Streamlit App
 st.title("AI Doctor Companion: Multi-Modality Medical Image Analysis")
 
-uploaded_files = st.file_uploader("Upload DICOM files (Multi-Modality: CT, MRI, X-ray, Ultrasound, PET, Endoscopy)", type=["dcm"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload DICOM or JPEG files (Multi-Modality: CT, MRI, X-ray, Ultrasound, PET, Endoscopy)", type=["dcm", "jpg", "jpeg"], accept_multiple_files=True)
 clinical_notes = st.text_area("Enter Clinical Notes")
 
 if st.button("Process and Generate Report") and uploaded_files:
     # Lazy load models here
-    clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model = load_models()
+    clip_model, clip_proc, blip_model, blip_proc, gpt2_tok, gpt2_model = load_models()
     
     images = []
     modalities = []
@@ -161,7 +169,15 @@ if st.button("Process and Generate Report") and uploaded_files:
         with open(save_path, "wb") as f:
             f.write(uploaded_file.getvalue())
         
-        image, modality, metadata = process_dicom(save_path)
+        file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+        if file_ext == '.dcm':
+            _, modality, metadata = process_dicom(save_path)
+        elif file_ext in ['.jpg', '.jpeg']:
+            _, modality, metadata = process_jpeg(save_path)
+        else:
+            st.error(f"Unsupported file type: {file_ext}")
+            continue
+        
         processed_data = preprocess_transforms({"image": save_path})
         images.append(processed_data["image"])
         modalities.append(modality)
@@ -174,7 +190,7 @@ if st.button("Process and Generate Report") and uploaded_files:
     analysis = analyze_and_reason(fused)
     
     # Report
-    report, heatmap_path = generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_proc, llama_tok, llama_model, gpt2_tok, gpt2_model)
+    report, heatmap_path = generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_proc, gpt2_tok, gpt2_model)
     
     # Save report
     report_path = os.path.join(STORAGE_DIR, "reports", f"report_{unique_id}.txt")
