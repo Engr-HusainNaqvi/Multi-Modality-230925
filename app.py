@@ -33,7 +33,7 @@ preprocess_transforms = Compose([
     Resized(keys=["image"], spatial_size=(256, 256, -1)),  # Handle 3D if needed
 ])
 
-# Load models with caching (define here, call lazily; removed TinyLlama for memory)
+# Load models with caching (define here, call lazily; lighter models only)
 @st.cache_resource
 def load_models():
     try:
@@ -119,7 +119,7 @@ def generate_report(analysis, images, clip_model, clip_proc, blip_model, blip_pr
     top_indices = torch.topk(similarities, k=3).indices
     top_findings = [reference_findings[i] for i in top_indices]
     
-    # Draft with GPT2 (replaced TinyLlama)
+    # Draft with GPT2
     prompt = (
         f"🧠 Caption: {caption_str}\n"
         f"📚 Retrieved Reports:\n" +
